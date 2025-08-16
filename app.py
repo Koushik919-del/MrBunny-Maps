@@ -11,6 +11,9 @@ st.sidebar.header("Search & Directions")
 start_address = st.sidebar.text_input("Start Address", "San Francisco")
 end_address = st.sidebar.text_input("Destination Address", "Los Angeles")
 
+# Sidebar: Units selector
+unit = st.sidebar.selectbox("Distance Unit", ["Kilometers", "Miles"])
+
 def geocode(address):
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": address, "format": "json"}
@@ -47,8 +50,8 @@ if st.sidebar.button("Find Route"):
                 "start_coords": start_coords,
                 "end_coords": end_coords,
                 "coords": coords,
-                "distance": distance_km,
-                "duration": duration_min
+                "distance_km": distance_km,
+                "duration_min": duration_min
             }
         except Exception:
             st.error("Error fetching route from OSRM. Please try again.")
@@ -58,7 +61,16 @@ if st.sidebar.button("Find Route"):
 # Display route if it exists
 if st.session_state.route_data:
     rd = st.session_state.route_data
-    st.success(f"Distance: {rd['distance']:.2f} km | Duration: {rd['duration']:.1f} min")
+
+    # Convert distance if needed
+    if unit == "Miles":
+        distance = rd["distance_km"] * 0.621371
+        distance_label = "mi"
+    else:
+        distance = rd["distance_km"]
+        distance_label = "km"
+
+    st.success(f"Distance: {distance:.2f} {distance_label} | Duration: {rd['duration_min']:.1f} min")
 
     m = folium.Map(location=rd["start_coords"], zoom_start=6)
     folium.Marker(rd["start_coords"], popup="Start", icon=folium.Icon(color="green")).add_to(m)
