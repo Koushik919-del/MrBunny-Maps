@@ -5,7 +5,7 @@ import requests
 
 # --- Page setup ---
 st.set_page_config(page_title="Nova Maps", layout="wide")
-st.title("🗺️ Nova Maps – Better Than Google Maps")
+st.title("📍Nova Maps – Better Than Google Maps")
 
 # --- Sidebar controls ---
 st.sidebar.header("Search & Directions")
