@@ -4,8 +4,11 @@ from streamlit_folium import st_folium
 import requests
 
 # --- Page setup ---
-st.set_page_config(page_title="Nova Maps", layout="wide")
-st.title("📍Nova Maps")
+st.set_page_config(
+    page_title="Nova Maps",
+    page_icon="📍",  # <-- This sets the favicon
+    layout="wide"
+)
 
 # --- Sidebar controls ---
 st.sidebar.header("Search & Directions")
