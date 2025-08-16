@@ -3,12 +3,15 @@ import folium
 from streamlit_folium import st_folium
 import requests
 
-# --- Page setup ---
+# --- Page setup with 📍 favicon ---
 st.set_page_config(
     page_title="Nova Maps",
-    page_icon="📍",  # <-- This sets the favicon
+    page_icon="📍",  # Favicon
     layout="wide"
 )
+
+# --- App title with 📍 logo ---
+st.title("📍 Nova Maps – Better Than Google Maps")
 
 # --- Sidebar controls ---
 st.sidebar.header("Search & Directions")
@@ -34,7 +37,7 @@ def geocode(address):
 
 # --- Initialize session state ---
 if "route_data" not in st.session_state:
-    st.session_state.route_data = None
+    st.session_state.route_data = {}
 
 # --- Find Route Button ---
 if st.sidebar.button("Find Route"):
@@ -42,11 +45,13 @@ if st.sidebar.button("Find Route"):
     end_coords = geocode(end_address)
     if start_coords and end_coords:
         try:
+            # Request route for the selected mode
             route_url = f"http://router.project-osrm.org/route/v1/{mode}/{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}?overview=full&geometries=geojson"
             res = requests.get(route_url, timeout=10).json()
             coords = res["routes"][0]["geometry"]["coordinates"]
             distance_km = res["routes"][0]["distance"] / 1000
             duration_min = res["routes"][0]["duration"] / 60
+            # Save route for the selected mode only
             st.session_state.route_data = {
                 "start_coords": start_coords,
                 "end_coords": end_coords,
@@ -73,6 +78,7 @@ with st.container():
             distance = rd["distance_km"]
             distance_label = "km"
 
+        # Display only the route info for the selected mode
         st.sidebar.success(
             f"Mode: {rd['mode'].capitalize()}\nDistance: {distance:.2f} {distance_label}\nDuration: {rd['duration_min']:.1f} min"
         )
@@ -85,6 +91,7 @@ with st.container():
             attr='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
         )
 
+        # Markers and route line
         folium.Marker(rd["start_coords"], popup="Start", icon=folium.Icon(color="green")).add_to(m)
         folium.Marker(rd["end_coords"], popup="End", icon=folium.Icon(color="red")).add_to(m)
         folium.PolyLine([(lat, lon) for lon, lat in rd["coords"]], color="blue", weight=5).add_to(m)
