@@ -1,6 +1,7 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
+from streamlit_geolocation import streamlit_geolocation
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import requests
@@ -337,6 +338,22 @@ with st.sidebar:
                 st.success(f"Found: {name[:80]}")
             else:
                 st.error("Location not found. Try a more specific address.")
+
+        st.divider()
+        st.caption("Or use your current location:")
+        location = streamlit_geolocation()
+
+        if location and location.get("latitude"):
+            loc_lat, loc_lon = location["latitude"], location["longitude"]
+            st.session_state.center = [loc_lat, loc_lon]
+            st.session_state.zoom   = 15
+            st.session_state.markers = [{
+                "lat": loc_lat, "lon": loc_lon,
+                "label": "My Location",
+                "popup": f"<b>📍 You are here</b><br>{loc_lat:.5f}, {loc_lon:.5f}",
+                "color": "blue", "icon": "user",
+            }]
+            st.success(f"Located you at {loc_lat:.5f}, {loc_lon:.5f}")
 
     # ── Directions tab ──────────────────────────────────────────────────────
     elif tab == "Directions":
