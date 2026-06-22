@@ -1,0 +1,18 @@
+from streamlit_geolocation import streamlit_geolocation
+
+# inside the Search tab in your sidebar
+st.divider()
+st.caption("Or use your current location:")
+location = streamlit_geolocation()
+
+if location and location.get("latitude"):
+    lat, lon = location["latitude"], location["longitude"]
+    st.session_state.center = [lat, lon]
+    st.session_state.zoom = 15
+    st.session_state.markers = [{
+        "lat": lat, "lon": lon,
+        "label": "My Location",
+        "popup": f"<b>📍 You are here</b><br>{lat:.5f}, {lon:.5f}",
+        "color": "blue", "icon": "user",
+    }]
+    st.success(f"Located you at {lat:.5f}, {lon:.5f}")
