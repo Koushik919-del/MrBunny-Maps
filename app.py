@@ -268,6 +268,25 @@ st.markdown("""
     margin: 6px 0;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
+
+/* ── Fullscreen map ─────────────────────────────────────────────────────── */
+.block-container {
+    padding-top: 0rem !important;
+    padding-bottom: 0rem !important;
+    padding-left: 0rem !important;
+    padding-right: 0rem !important;
+    max-width: 100% !important;
+}
+header[data-testid="stHeader"] {
+    height: 0px;
+    display: none;
+}
+iframe {
+    height: 100vh !important;
+}
+div[data-testid="stVerticalBlock"] > div:has(iframe) {
+    height: 100vh !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -493,7 +512,7 @@ m = build_map(
     map_style=style,
 )
 
-map_data = st_folium(m, use_container_width=True, height=700, returned_objects=["last_clicked"])
+map_data = st_folium(m, use_container_width=True, height=1000, returned_objects=["last_clicked"])
 
 # ── Click-to-explore ──────────────────────────────────────────────────────────
 if map_data and map_data.get("last_clicked"):
