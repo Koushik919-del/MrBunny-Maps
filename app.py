@@ -10,7 +10,7 @@ from datetime import datetime
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="OpenMap",
+    page_title="Nova Maps",
     page_icon="🗺️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -21,7 +21,7 @@ TOMTOM_API_KEY = st.secrets.get("TOMTOM_API_KEY", os.getenv("TOMTOM_API_KEY", ""
 ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    ""))
 
 # ── Geocoder ──────────────────────────────────────────────────────────────────
-geolocator = Nominatim(user_agent="openmap_app_v1")
+geolocator = Nominatim(user_agent="Nova Maps_app_v1")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -273,7 +273,7 @@ st.markdown("""
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="main-title">🗺️ OpenMap</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">🗺️ Nova Maps</div>', unsafe_allow_html=True)
     st.caption("Powered by OSM · TomTom · ORS")
     st.divider()
 
