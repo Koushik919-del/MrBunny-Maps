@@ -3,17 +3,530 @@ import folium
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
-import requests 
+import requests
 import json
 import os
 from datetime import datetime
 
+# ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Nova Maps",
-    page_icon=" 📍 ",
+    page_title="OpenMap",
+    page_icon="🗺️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# ── API Keys ──────────────────────────────────────────────────────────────────
 TOMTOM_API_KEY = st.secrets.get("TOMTOM_API_KEY", os.getenv("TOMTOM_API_KEY", ""))
-ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY"     ""))
+ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    ""))
+
+# ── Geocoder ──────────────────────────────────────────────────────────────────
+geolocator = Nominatim(user_agent="openmap_app_v1")
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def geocode(address: str):
+    """Return (lat, lon, display_name) or None."""
+    try:
+        loc = geolocator.geocode(address, timeout=10)
+        if loc:
+            return loc.latitude, loc.longitude, loc.address
+    except Exception as e:
+        st.error(f"Geocoding error: {e}")
+    return None
+
+def search_places(query: str, lat: float, lon: float, radius: int = 5000):
+    """Search nearby places via TomTom POI search."""
+    if not TOMTOM_API_KEY:
+        return []
+    url = (
+        f"https://api.tomtom.com/search/2/poiSearch/{requests.utils.quote(query)}.json"
+        f"?lat={lat}&lon={lon}&radius={radius}&limit=15&key={TOMTOM_API_KEY}"
+    )
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        return [
+            {
+                "name": p.get("poi", {}).get("name", "Unknown"),
+                "address": p.get("address", {}).get("freeformAddress", ""),
+                "lat": p["position"]["lat"],
+                "lon": p["position"]["lon"],
+                "category": p.get("poi", {}).get("categories", [""])[0],
+                "phone": p.get("poi", {}).get("phone", ""),
+            }
+            for p in results
+        ]
+    except Exception as e:
+        st.error(f"Place search error: {e}")
+        return []
+
+def get_route(origin_coords, dest_coords, mode="car"):
+    """Get route from OpenRouteService."""
+    if not ORS_API_KEY:
+        # Fallback: straight line
+        return None, None
+    profile_map = {"car": "driving-car", "walk": "foot-walking", "bike": "cycling-regular"}
+    profile = profile_map.get(mode, "driving-car")
+    url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
+    body = {"coordinates": [[origin_coords[1], origin_coords[0]], [dest_coords[1], dest_coords[0]]]}
+    try:
+        r = requests.post(url, json=body, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        feature = data["features"][0]
+        coords = [(c[1], c[0]) for c in feature["geometry"]["coordinates"]]
+        summary = feature["properties"]["summary"]
+        dist_km = round(summary["distance"] / 1000, 2)
+        dur_min = round(summary["duration"] / 60, 1)
+        return coords, {"distance_km": dist_km, "duration_min": dur_min}
+    except Exception as e:
+        st.warning(f"Routing error: {e}")
+        return None, None
+
+def get_traffic_flow(lat: float, lon: float):
+    """Get real-time traffic flow from TomTom."""
+    if not TOMTOM_API_KEY:
+        return None
+    url = (
+        f"https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json"
+        f"?point={lat},{lon}&key={TOMTOM_API_KEY}"
+    )
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        d = r.json().get("flowSegmentData", {})
+        return {
+            "current_speed":   d.get("currentSpeed", "N/A"),
+            "free_flow_speed": d.get("freeFlowSpeed", "N/A"),
+            "confidence":      d.get("confidence", "N/A"),
+            "road_closure":    d.get("roadClosure", False),
+        }
+    except Exception:
+        return None
+
+def get_traffic_incidents(lat: float, lon: float, radius: float = 0.1):
+    """Get traffic incidents near a point from TomTom."""
+    if not TOMTOM_API_KEY:
+        return []
+    bbox = f"{lon-radius},{lat-radius},{lon+radius},{lat+radius}"
+    url = (
+        f"https://api.tomtom.com/traffic/services/5/incidentDetails"
+        f"?bbox={bbox}&fields={{incidents{{type,geometry{{type,coordinates}},properties{{iconCategory,magnitudeOfDelay,events{{description,code,iconCategory}},startTime,endTime,from,to,length,delay,roadNumbers,timeValidity}}}}}}&language=en-GB&t=1111&key={TOMTOM_API_KEY}"
+    )
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return r.json().get("incidents", [])
+    except Exception:
+        return []
+
+def traffic_color(current, free_flow):
+    """Return a color based on congestion ratio."""
+    try:
+        ratio = current / free_flow
+        if ratio >= 0.9:  return "green"
+        if ratio >= 0.65: return "orange"
+        return "red"
+    except Exception:
+        return "gray"
+
+def build_map(center, zoom, markers=None, route_coords=None,
+              show_traffic_layer=False, incidents=None, map_style="OpenStreetMap"):
+
+    tile_options = {
+        "OpenStreetMap":   ("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                            "© OpenStreetMap contributors"),
+        "CartoDB Dark":    ("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+                            "© OpenStreetMap © CARTO"),
+        "CartoDB Light":   ("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                            "© OpenStreetMap © CARTO"),
+        "Stadia Terrain":  ("https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.png",
+                            "© Stadia Maps © Stamen Design © OpenStreetMap"),
+        "Satellite (Esri)":("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                            "© Esri © DigitalGlobe © GeoEye"),
+    }
+
+    tiles, attr = tile_options.get(map_style, tile_options["OpenStreetMap"])
+    m = folium.Map(location=center, zoom_start=zoom, tiles=tiles, attr=attr)
+
+    # Traffic tile overlay from TomTom
+    if show_traffic_layer and TOMTOM_API_KEY:
+        traffic_url = (
+            f"https://api.tomtom.com/traffic/map/4/tile/flow/relative0/"
+            f"{{z}}/{{x}}/{{y}}.png?key={TOMTOM_API_KEY}"
+        )
+        folium.TileLayer(
+            tiles=traffic_url,
+            attr="© TomTom",
+            name="Traffic Flow",
+            overlay=True,
+            control=True,
+            opacity=0.7,
+        ).add_to(m)
+
+    # Route polyline
+    if route_coords:
+        folium.PolyLine(route_coords, color="#1a73e8", weight=5, opacity=0.85).add_to(m)
+
+    # Markers
+    for mk in (markers or []):
+        icon_color = mk.get("color", "red")
+        icon_name  = mk.get("icon",  "map-marker")
+        popup_html = mk.get("popup", mk.get("label", ""))
+        folium.Marker(
+            location=[mk["lat"], mk["lon"]],
+            popup=folium.Popup(popup_html, max_width=280),
+            tooltip=mk.get("label", ""),
+            icon=folium.Icon(color=icon_color, icon=icon_name, prefix="fa"),
+        ).add_to(m)
+
+    # Traffic incidents
+    for inc in (incidents or []):
+        try:
+            coords = inc["geometry"]["coordinates"]
+            props  = inc.get("properties", {})
+            events = props.get("events", [{}])
+            desc   = events[0].get("description", "Incident") if events else "Incident"
+            delay  = props.get("delay", 0)
+            lat_i  = coords[1] if inc["geometry"]["type"] == "Point" else coords[0][1]
+            lon_i  = coords[0] if inc["geometry"]["type"] == "Point" else coords[0][0]
+            popup  = f"<b>⚠️ {desc}</b><br>Delay: {delay}s"
+            folium.CircleMarker(
+                location=[lat_i, lon_i],
+                radius=8, color="orange", fill=True, fill_color="orange",
+                popup=folium.Popup(popup, max_width=220),
+                tooltip=desc,
+            ).add_to(m)
+        except Exception:
+            continue
+
+    folium.LayerControl().add_to(m)
+    return m
+
+# ── Session state defaults ────────────────────────────────────────────────────
+defaults = {
+    "center": [34.0, -117.2],   # Menifee, CA default
+    "zoom": 12,
+    "markers": [],
+    "route_coords": None,
+    "route_info": None,
+    "traffic_data": None,
+    "incidents": [],
+    "place_results": [],
+    "active_tab": "Search",
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── CSS ───────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* Overall dark nav feel */
+[data-testid="stSidebar"] {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stMarkdown p {
+    color: #e0e0e0 !important;
+}
+.main-title {
+    font-size: 2rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, #1a73e8, #34a853);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.1rem;
+}
+.route-card {
+    background: #f0f7ff;
+    border-left: 4px solid #1a73e8;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 8px 0;
+}
+.traffic-card {
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 6px 0;
+}
+.traffic-green  { background:#e6f9ee; border-left:4px solid #34a853; }
+.traffic-orange { background:#fff3e0; border-left:4px solid #fb8c00; }
+.traffic-red    { background:#fce8e6; border-left:4px solid #ea4335; }
+.place-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 6px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown('<div class="main-title">🗺️ OpenMap</div>', unsafe_allow_html=True)
+    st.caption("Powered by OSM · TomTom · ORS")
+    st.divider()
+
+    tab = st.radio(
+        "Mode",
+        ["Search", "Directions", "Traffic", "Places", "Layers"],
+        index=["Search", "Directions", "Traffic", "Places", "Layers"].index(
+            st.session_state.active_tab
+        ),
+    )
+    st.session_state.active_tab = tab
+    st.divider()
+
+    # ── Search tab ──────────────────────────────────────────────────────────
+    if tab == "Search":
+        st.subheader("🔍 Search Location")
+        search_query = st.text_input("Enter address or place", placeholder="e.g. Eiffel Tower, Paris")
+        col1, col2 = st.columns(2)
+        search_btn = col1.button("Search", use_container_width=True, type="primary")
+        clear_btn  = col2.button("Clear",  use_container_width=True)
+
+        if clear_btn:
+            st.session_state.markers = []
+            st.session_state.route_coords = None
+            st.session_state.route_info = None
+            st.session_state.traffic_data = None
+            st.session_state.incidents = []
+            st.rerun()
+
+        if search_btn and search_query:
+            result = geocode(search_query)
+            if result:
+                lat, lon, name = result
+                st.session_state.center = [lat, lon]
+                st.session_state.zoom   = 15
+                st.session_state.markers = [{
+                    "lat": lat, "lon": lon,
+                    "label": name[:60],
+                    "popup": f"<b>{name}</b><br>📍 {lat:.5f}, {lon:.5f}",
+                    "color": "blue", "icon": "map-marker",
+                }]
+                st.success(f"Found: {name[:80]}")
+            else:
+                st.error("Location not found. Try a more specific address.")
+
+    # ── Directions tab ──────────────────────────────────────────────────────
+    elif tab == "Directions":
+        st.subheader("🧭 Get Directions")
+        origin_input = st.text_input("From", placeholder="Start address")
+        dest_input   = st.text_input("To",   placeholder="Destination address")
+        mode = st.selectbox("Travel mode", ["car", "walk", "bike"],
+                            format_func=lambda x: {"car":"🚗 Drive","walk":"🚶 Walk","bike":"🚲 Bike"}[x])
+
+        if st.button("Get Directions", type="primary", use_container_width=True):
+            if origin_input and dest_input:
+                with st.spinner("Calculating route…"):
+                    orig = geocode(origin_input)
+                    dest = geocode(dest_input)
+                    if orig and dest:
+                        o_lat, o_lon, o_name = orig
+                        d_lat, d_lon, d_name = dest
+                        route_coords, info = get_route((o_lat, o_lon), (d_lat, d_lon), mode)
+                        st.session_state.markers = [
+                            {"lat": o_lat, "lon": o_lon, "label": "Start",
+                             "popup": f"<b>🟢 Start</b><br>{o_name[:80]}",
+                             "color": "green", "icon": "play"},
+                            {"lat": d_lat, "lon": d_lon, "label": "End",
+                             "popup": f"<b>🔴 End</b><br>{d_name[:80]}",
+                             "color": "red", "icon": "flag"},
+                        ]
+                        st.session_state.route_coords = route_coords
+                        st.session_state.route_info   = info
+                        mid = [(o_lat + d_lat) / 2, (o_lon + d_lon) / 2]
+                        st.session_state.center = mid
+                        st.session_state.zoom   = 12
+                        if info:
+                            st.markdown(f"""
+                            <div class="route-card">
+                            🛣️ <b>{info['distance_km']} km</b> &nbsp;|&nbsp;
+                            ⏱️ <b>{info['duration_min']} min</b>
+                            </div>""", unsafe_allow_html=True)
+                    else:
+                        st.error("Could not geocode one or both addresses.")
+            else:
+                st.warning("Please enter both origin and destination.")
+
+        if not ORS_API_KEY:
+            st.info("💡 Add an ORS API key in secrets for turn-by-turn routing.")
+
+    # ── Traffic tab ─────────────────────────────────────────────────────────
+    elif tab == "Traffic":
+        st.subheader("🚦 Traffic Info")
+        traffic_loc = st.text_input("Check traffic near", placeholder="Address or place")
+
+        col1, col2 = st.columns(2)
+        show_layer = col1.checkbox("Show traffic layer", value=True)
+        show_incidents = col2.checkbox("Show incidents", value=True)
+
+        if st.button("Get Traffic", type="primary", use_container_width=True):
+            if traffic_loc:
+                result = geocode(traffic_loc)
+                if result:
+                    lat, lon, name = result
+                    st.session_state.center = [lat, lon]
+                    st.session_state.zoom   = 14
+                    with st.spinner("Fetching traffic data…"):
+                        tf = get_traffic_flow(lat, lon)
+                        incidents = get_traffic_incidents(lat, lon) if show_incidents else []
+                        st.session_state.traffic_data = tf
+                        st.session_state.incidents    = incidents
+                    if tf:
+                        color = traffic_color(tf["current_speed"], tf["free_flow_speed"])
+                        emoji = {"green": "🟢", "orange": "🟡", "red": "🔴"}.get(color, "⚪")
+                        st.markdown(f"""
+                        <div class="traffic-card traffic-{color}">
+                        {emoji} <b>Current speed:</b> {tf['current_speed']} km/h<br>
+                        🏁 <b>Free-flow speed:</b> {tf['free_flow_speed']} km/h<br>
+                        📊 <b>Confidence:</b> {tf['confidence']}<br>
+                        🚧 <b>Road closure:</b> {'Yes ⚠️' if tf['road_closure'] else 'No'}
+                        </div>""", unsafe_allow_html=True)
+                    else:
+                        if not TOMTOM_API_KEY:
+                            st.info("Add a TomTom API key in secrets to see live traffic.")
+                    if incidents:
+                        st.warning(f"⚠️ {len(incidents)} incident(s) near this area.")
+                else:
+                    st.error("Location not found.")
+            else:
+                st.warning("Enter a location to check traffic.")
+
+        st.session_state["show_traffic_layer"] = show_layer
+
+    # ── Places tab ──────────────────────────────────────────────────────────
+    elif tab == "Places":
+        st.subheader("📍 Find Nearby Places")
+        place_query   = st.text_input("What are you looking for?", placeholder="coffee, hospital, gas station…")
+        near_location = st.text_input("Near", placeholder="Your location or an address")
+        radius_km     = st.slider("Search radius (km)", 1, 20, 5)
+
+        if st.button("Search Places", type="primary", use_container_width=True):
+            if place_query and near_location:
+                result = geocode(near_location)
+                if result:
+                    lat, lon, _ = result
+                    with st.spinner("Searching…"):
+                        places = search_places(place_query, lat, lon, radius_km * 1000)
+                    st.session_state.place_results = places
+                    st.session_state.center = [lat, lon]
+                    st.session_state.zoom   = 13
+                    # Pin all results
+                    st.session_state.markers = [
+                        {
+                            "lat": p["lat"], "lon": p["lon"],
+                            "label": p["name"],
+                            "popup": (
+                                f"<b>{p['name']}</b><br>"
+                                f"📌 {p['address']}<br>"
+                                f"🏷️ {p['category']}<br>"
+                                + (f"📞 {p['phone']}" if p['phone'] else "")
+                            ),
+                            "color": "purple", "icon": "map-pin",
+                        }
+                        for p in places
+                    ]
+                    if places:
+                        st.success(f"Found {len(places)} places.")
+                    else:
+                        if not TOMTOM_API_KEY:
+                            st.info("Add a TomTom API key for place search.")
+                        else:
+                            st.info("No places found. Try a different query or wider radius.")
+                else:
+                    st.error("Location not found.")
+            else:
+                st.warning("Please fill in both fields.")
+
+        # Show results list
+        for p in st.session_state.place_results:
+            st.markdown(f"""
+            <div class="place-card">
+            <b>{p['name']}</b><br>
+            <small>📌 {p['address']}</small><br>
+            <small>🏷️ {p['category']}</small>
+            {"<br><small>📞 " + p['phone'] + "</small>" if p['phone'] else ""}
+            </div>""", unsafe_allow_html=True)
+
+    # ── Layers tab ──────────────────────────────────────────────────────────
+    elif tab == "Layers":
+        st.subheader("🗂️ Map Style")
+        map_style = st.selectbox("Base layer", [
+            "OpenStreetMap", "CartoDB Dark", "CartoDB Light",
+            "Stadia Terrain", "Satellite (Esri)",
+        ])
+        st.session_state["map_style"] = map_style
+        st.info("Switch between map styles instantly. Satellite imagery via Esri.")
+
+    # ── API key status ───────────────────────────────────────────────────────
+    st.divider()
+    with st.expander("🔑 API Key Status"):
+        st.markdown(
+            f"**TomTom:** {'✅ Connected' if TOMTOM_API_KEY else '❌ Not set'}\n\n"
+            f"**OpenRouteService:** {'✅ Connected' if ORS_API_KEY else '❌ Not set'}"
+        )
+        st.caption("Set keys in `.streamlit/secrets.toml` or environment variables.")
+
+# ── Main map area ─────────────────────────────────────────────────────────────
+show_traffic = st.session_state.get("show_traffic_layer", False) and tab == "Traffic"
+style        = st.session_state.get("map_style", "OpenStreetMap")
+
+m = build_map(
+    center=st.session_state.center,
+    zoom=st.session_state.zoom,
+    markers=st.session_state.markers,
+    route_coords=st.session_state.route_coords,
+    show_traffic_layer=show_traffic,
+    incidents=st.session_state.incidents if tab == "Traffic" else [],
+    map_style=style,
+)
+
+map_data = st_folium(m, use_container_width=True, height=700, returned_objects=["last_clicked"])
+
+# ── Click-to-explore ──────────────────────────────────────────────────────────
+if map_data and map_data.get("last_clicked"):
+    click_lat = map_data["last_clicked"]["lat"]
+    click_lon = map_data["last_clicked"]["lng"]
+    with st.expander(f"📍 Clicked: {click_lat:.5f}, {click_lon:.5f}", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        if col1.button("Set as Origin"):
+            st.session_state.active_tab = "Directions"
+            st.rerun()
+        if col2.button("Traffic here") and TOMTOM_API_KEY:
+            tf = get_traffic_flow(click_lat, click_lon)
+            if tf:
+                color = traffic_color(tf["current_speed"], tf["free_flow_speed"])
+                emoji = {"green": "🟢", "orange": "🟡", "red": "🔴"}.get(color, "⚪")
+                st.markdown(
+                    f"{emoji} Speed: **{tf['current_speed']}** / {tf['free_flow_speed']} km/h &nbsp; "
+                    f"| Closure: {'⚠️ Yes' if tf['road_closure'] else 'No'}"
+                )
+        if col3.button("Drop pin here"):
+            st.session_state.markers.append({
+                "lat": click_lat, "lon": click_lon,
+                "label": f"Pin {click_lat:.3f},{click_lon:.3f}",
+                "popup": f"📍 {click_lat:.5f}, {click_lon:.5f}",
+                "color": "red", "icon": "map-pin",
+            })
+            st.rerun()
+
+# ── Route summary (bottom) ────────────────────────────────────────────────────
+if st.session_state.route_info and tab == "Directions":
+    info = st.session_state.route_info
+    st.markdown(f"""
+    <div class="route-card">
+    🛣️ &nbsp;<b>Distance:</b> {info['distance_km']} km &nbsp;&nbsp;
+    ⏱️ &nbsp;<b>Est. time:</b> {info['duration_min']} min
+    </div>""", unsafe_allow_html=True)
