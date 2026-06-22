@@ -1,4 +1,4 @@
-# 🗺️ OpenMap
+# 🗺️ Nova Maps
 
 A full-featured Google Maps alternative built with Streamlit, Folium, OpenStreetMap, TomTom, and OpenRouteService.
 
@@ -24,8 +24,8 @@ A full-featured Google Maps alternative built with Streamlit, Folium, OpenStreet
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/YOUR_USERNAME/openmap.git
-cd openmap
+git clone https://github.com/YOUR_USERNAME/Nova Maps.git
+cd Nova Maps
 ```
 
 ### 2. Install dependencies
@@ -68,7 +68,7 @@ ORS_API_KEY    = "your_ors_key_here"
 ## 🗂️ Project Structure
 
 ```
-openmap/
+Nova Maps/
 ├── app.py                  # Main Streamlit app
 ├── requirements.txt        # Python dependencies
 ├── README.md
