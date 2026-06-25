@@ -3,6 +3,7 @@ import folium
 from streamlit_folium import st_folium
 from streamlit_geolocation import streamlit_geolocation
 from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 from geopy.distance import geodesic
 import requests
 import json
@@ -22,18 +23,28 @@ TOMTOM_API_KEY = st.secrets.get("TOMTOM_API_KEY", os.getenv("TOMTOM_API_KEY", ""
 ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    ""))
 
 # ── Geocoder ──────────────────────────────────────────────────────────────────
-geolocator = Nominatim(user_agent="Nova Maps_app_v1")
+geolocator = Nominatim(user_agent="nova-maps-app (contact: your-email@example.com)")
+geocode_with_limit = RateLimiter(
+    geolocator.geocode,
+    min_delay_seconds=1,      # Nominatim policy: max 1 request/sec
+    max_retries=2,
+    error_wait_seconds=2.0,
+    swallow_exceptions=False,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def geocode(address: str):
     """Return (lat, lon, display_name) or None."""
     try:
-        loc = geolocator.geocode(address, timeout=10)
+        loc = geocode_with_limit(address, timeout=10)
         if loc:
             return loc.latitude, loc.longitude, loc.address
     except Exception as e:
-        st.error(f"Geocoding error: {e}")
+        if "429" in str(e):
+            st.error("Geocoding is temporarily rate-limited (too many requests). Wait a few seconds and try again.")
+        else:
+            st.error(f"Geocoding error: {e}")
     return None
 
 def search_places(query: str, lat: float, lon: float, radius: int = 5000):
@@ -135,7 +146,8 @@ def traffic_color(current, free_flow):
         return "gray"
 
 def build_map(center, zoom, markers=None, route_coords=None,
-              show_traffic_layer=False, incidents=None, map_style="OpenStreetMap"):
+              show_traffic_layer=False, incidents=None, map_style="OpenStreetMap",
+              accuracy_circle=None):
 
     tile_options = {
         "OpenStreetMap":   ("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -171,6 +183,18 @@ def build_map(center, zoom, markers=None, route_coords=None,
     # Route polyline
     if route_coords:
         folium.PolyLine(route_coords, color="#1a73e8", weight=5, opacity=0.85).add_to(m)
+
+    # Geolocation accuracy circle
+    if accuracy_circle and accuracy_circle.get("radius_m"):
+        folium.Circle(
+            location=[accuracy_circle["lat"], accuracy_circle["lon"]],
+            radius=accuracy_circle["radius_m"],
+            color="#1a73e8",
+            fill=True,
+            fill_color="#1a73e8",
+            fill_opacity=0.12,
+            weight=1,
+        ).add_to(m)
 
     # Markers
     for mk in (markers or []):
@@ -218,6 +242,7 @@ defaults = {
     "incidents": [],
     "place_results": [],
     "active_tab": "Search",
+    "location_accuracy": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -345,15 +370,25 @@ with st.sidebar:
 
         if location and location.get("latitude"):
             loc_lat, loc_lon = location["latitude"], location["longitude"]
+            accuracy = location.get("accuracy")
             st.session_state.center = [loc_lat, loc_lon]
             st.session_state.zoom   = 15
             st.session_state.markers = [{
                 "lat": loc_lat, "lon": loc_lon,
                 "label": "My Location",
-                "popup": f"<b>📍 You are here</b><br>{loc_lat:.5f}, {loc_lon:.5f}",
+                "popup": f"<b>📍 You are here</b><br>{loc_lat:.5f}, {loc_lon:.5f}"
+                         + (f"<br>Accuracy: ±{accuracy:.0f} m" if accuracy else ""),
                 "color": "blue", "icon": "user",
             }]
-            st.success(f"Located you at {loc_lat:.5f}, {loc_lon:.5f}")
+            st.session_state.location_accuracy = {
+                "lat": loc_lat, "lon": loc_lon, "radius_m": accuracy
+            } if accuracy else None
+            if accuracy:
+                st.success(f"Located you at {loc_lat:.5f}, {loc_lon:.5f} (±{accuracy:.0f} m)")
+                if accuracy > 200:
+                    st.caption("⚠️ Low precision — likely Wi-Fi/IP-based location (common on desktop). Try on a phone with GPS/location services on for a tighter fix.")
+            else:
+                st.success(f"Located you at {loc_lat:.5f}, {loc_lon:.5f}")
 
     # ── Directions tab ──────────────────────────────────────────────────────
     elif tab == "Directions":
@@ -527,6 +562,7 @@ m = build_map(
     show_traffic_layer=show_traffic,
     incidents=st.session_state.incidents if tab == "Traffic" else [],
     map_style=style,
+    accuracy_circle=st.session_state.get("location_accuracy") if tab == "Search" else None,
 )
 
 map_data = st_folium(m, use_container_width=True, height=1000, returned_objects=["last_clicked"])
@@ -566,3 +602,10 @@ if st.session_state.route_info and tab == "Directions":
     🛣️ &nbsp;<b>Distance:</b> {info['distance_km']} km &nbsp;&nbsp;
     ⏱️ &nbsp;<b>Est. time:</b> {info['duration_min']} min
     </div>""", unsafe_allow_html=True)
+
+# ── MrBunny assistant widget (loaded from its own file) ───────────────────────
+try:
+    with open("mrbunny_widget.html", "r", encoding="utf-8") as f:
+        components.html(f.read(), height=1, width=1)
+except FileNotFoundError:
+    pass  # widget file not present; app still works fine without it
