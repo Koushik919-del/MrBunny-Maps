@@ -2,7 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 from streamlit_geolocation import streamlit_geolocation
-from geopy.geocoders import Nominatim
+from geopy.geocoders import Nominatim, Photon
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.distance import geodesic
 import requests
@@ -21,6 +21,7 @@ st.set_page_config(
 # ── API Keys ──────────────────────────────────────────────────────────────────
 TOMTOM_API_KEY = st.secrets.get("TOMTOM_API_KEY", os.getenv("TOMTOM_API_KEY", ""))
 ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    ""))
+STADIA_API_KEY = st.secrets.get("STADIA_API_KEY", os.getenv("STADIA_API_KEY", ""))
 
 # ── Geocoder ──────────────────────────────────────────────────────────────────
 geolocator = Nominatim(user_agent="nova-maps-app (contact: your-email@example.com)")
@@ -32,20 +33,40 @@ geocode_with_limit = RateLimiter(
     swallow_exceptions=False,
 )
 
+# Fallback geocoder — used automatically if Nominatim is rate-limited or
+# temporarily blocking this IP (403). Different infrastructure, no API key needed.
+photon_geolocator = Photon(user_agent="nova-maps-app (contact: your-email@example.com)")
+photon_geocode_with_limit = RateLimiter(
+    photon_geolocator.geocode,
+    min_delay_seconds=1,
+    max_retries=1,
+    error_wait_seconds=2.0,
+    swallow_exceptions=False,
+)
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def geocode(address: str):
-    """Return (lat, lon, display_name) or None."""
+    """Return (lat, lon, display_name) or None. Falls back to Photon if Nominatim is blocked/rate-limited."""
     try:
         loc = geocode_with_limit(address, timeout=10)
         if loc:
             return loc.latitude, loc.longitude, loc.address
+        return None  # Nominatim responded but found nothing — don't fall back, it's a genuine no-match
     except Exception as e:
-        if "429" in str(e):
-            st.error("Geocoding is temporarily rate-limited (too many requests). Wait a few seconds and try again.")
+        if "403" in str(e) or "429" in str(e):
+            st.caption("Primary geocoder is rate-limited — trying a fallback…")
+            try:
+                loc = photon_geocode_with_limit(address, timeout=10)
+                if loc:
+                    return loc.latitude, loc.longitude, loc.address
+                return None
+            except Exception as e2:
+                st.error(f"Both geocoders failed. Primary: rate-limited. Fallback error: {e2}")
+                return None
         else:
             st.error(f"Geocoding error: {e}")
-    return None
+            return None
 
 def search_places(query: str, lat: float, lon: float, radius: int = 5000):
     """Search nearby places via TomTom POI search."""
@@ -149,6 +170,10 @@ def build_map(center, zoom, markers=None, route_coords=None,
               show_traffic_layer=False, incidents=None, map_style="OpenStreetMap",
               accuracy_circle=None):
 
+    stadia_url = "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.png"
+    if STADIA_API_KEY:
+        stadia_url += f"?api_key={STADIA_API_KEY}"
+
     tile_options = {
         "OpenStreetMap":   ("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
                             "© OpenStreetMap contributors"),
@@ -156,8 +181,10 @@ def build_map(center, zoom, markers=None, route_coords=None,
                             "© OpenStreetMap © CARTO"),
         "CartoDB Light":   ("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
                             "© OpenStreetMap © CARTO"),
-        "Stadia Terrain":  ("https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.png",
-                            "© Stadia Maps © Stamen Design © OpenStreetMap"),
+        "Stadia Terrain":  (stadia_url if STADIA_API_KEY else
+                            "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+                            "© Stadia Maps © Stamen Design © OpenStreetMap" if STADIA_API_KEY else
+                            "© OpenTopoMap (CC-BY-SA) © OpenStreetMap contributors"),
         "Satellite (Esri)":("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
                             "© Esri © DigitalGlobe © GeoEye"),
     }
@@ -540,13 +567,19 @@ with st.sidebar:
         ])
         st.session_state["map_style"] = map_style
         st.info("Switch between map styles instantly. Satellite imagery via Esri.")
+        if map_style == "Stadia Terrain":
+            if STADIA_API_KEY:
+                st.caption("✅ Using Stadia Maps terrain tiles (API key configured).")
+            else:
+                st.caption("ℹ️ No Stadia API key set — using OpenTopoMap (free, no key needed) as the terrain source instead. Add a `STADIA_API_KEY` in secrets for Stadia's tiles.")
 
     # ── API key status ───────────────────────────────────────────────────────
     st.divider()
     with st.expander("🔑 API Key Status"):
         st.markdown(
             f"**TomTom:** {'✅ Connected' if TOMTOM_API_KEY else '❌ Not set'}\n\n"
-            f"**OpenRouteService:** {'✅ Connected' if ORS_API_KEY else '❌ Not set'}"
+            f"**OpenRouteService:** {'✅ Connected' if ORS_API_KEY else '❌ Not set'}\n\n"
+            f"**Stadia Maps:** {'✅ Connected' if STADIA_API_KEY else '⚪ Not set (using free OpenTopoMap fallback)'}"
         )
         st.caption("Set keys in `.streamlit/secrets.toml` or environment variables.")
 
