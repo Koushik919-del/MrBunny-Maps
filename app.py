@@ -20,7 +20,7 @@ st.set_page_config(
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
 TOMTOM_API_KEY = st.secrets.get("TOMTOM_API_KEY", os.getenv("TOMTOM_API_KEY", ""))
-ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    ""))
+ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    "" ))
 STADIA_API_KEY = st.secrets.get("STADIA_API_KEY", os.getenv("STADIA_API_KEY", ""))
 
 # ── Geocoder ──────────────────────────────────────────────────────────────────
@@ -67,33 +67,6 @@ def geocode(address: str):
         else:
             st.error(f"Geocoding error: {e}")
             return None
-
-def search_places(query: str, lat: float, lon: float, radius: int = 5000):
-    """Search nearby places via TomTom POI search."""
-    if not TOMTOM_API_KEY:
-        return []
-    url = (
-        f"https://api.tomtom.com/search/2/poiSearch/{requests.utils.quote(query)}.json"
-        f"?lat={lat}&lon={lon}&radius={radius}&limit=15&key={TOMTOM_API_KEY}"
-    )
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        results = r.json().get("results", [])
-        return [
-            {
-                "name": p.get("poi", {}).get("name", "Unknown"),
-                "address": p.get("address", {}).get("freeformAddress", ""),
-                "lat": p["position"]["lat"],
-                "lon": p["position"]["lon"],
-                "category": p.get("poi", {}).get("categories", [""])[0],
-                "phone": p.get("poi", {}).get("phone", ""),
-            }
-            for p in results
-        ]
-    except Exception as e:
-        st.error(f"Place search error: {e}")
-        return []
 
 def get_route(origin_coords, dest_coords, mode="car"):
     """Get route from OpenRouteService."""
@@ -267,7 +240,6 @@ defaults = {
     "route_info": None,
     "traffic_data": None,
     "incidents": [],
-    "place_results": [],
     "active_tab": "Search",
     "location_accuracy": None,
 }
@@ -313,14 +285,6 @@ st.markdown("""
 .traffic-green  { background:#e6f9ee; border-left:4px solid #34a853; }
 .traffic-orange { background:#fff3e0; border-left:4px solid #fb8c00; }
 .traffic-red    { background:#fce8e6; border-left:4px solid #ea4335; }
-.place-card {
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin: 6px 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-}
 
 /* ── Fullscreen map ─────────────────────────────────────────────────────── */
 .block-container {
@@ -351,8 +315,8 @@ with st.sidebar:
 
     tab = st.radio(
         "Mode",
-        ["Search", "Directions", "Traffic", "Places", "Layers"],
-        index=["Search", "Directions", "Traffic", "Places", "Layers"].index(
+        ["Search", "Directions", "Traffic", "Layers"],
+        index=["Search", "Directions", "Traffic", "Layers"].index(
             st.session_state.active_tab
         ),
     )
@@ -503,60 +467,6 @@ with st.sidebar:
                 st.warning("Enter a location to check traffic.")
 
         st.session_state["show_traffic_layer"] = show_layer
-
-    # ── Places tab ──────────────────────────────────────────────────────────
-    elif tab == "Places":
-        st.subheader("📍 Find Nearby Places")
-        place_query   = st.text_input("What are you looking for?", placeholder="coffee, hospital, gas station…")
-        near_location = st.text_input("Near", placeholder="Your location or an address")
-        radius_km     = st.slider("Search radius (km)", 1, 20, 5)
-
-        if st.button("Search Places", type="primary", use_container_width=True):
-            if place_query and near_location:
-                result = geocode(near_location)
-                if result:
-                    lat, lon, _ = result
-                    with st.spinner("Searching…"):
-                        places = search_places(place_query, lat, lon, radius_km * 1000)
-                    st.session_state.place_results = places
-                    st.session_state.center = [lat, lon]
-                    st.session_state.zoom   = 13
-                    # Pin all results
-                    st.session_state.markers = [
-                        {
-                            "lat": p["lat"], "lon": p["lon"],
-                            "label": p["name"],
-                            "popup": (
-                                f"<b>{p['name']}</b><br>"
-                                f"📌 {p['address']}<br>"
-                                f"🏷️ {p['category']}<br>"
-                                + (f"📞 {p['phone']}" if p['phone'] else "")
-                            ),
-                            "color": "purple", "icon": "map-pin",
-                        }
-                        for p in places
-                    ]
-                    if places:
-                        st.success(f"Found {len(places)} places.")
-                    else:
-                        if not TOMTOM_API_KEY:
-                            st.info("Add a TomTom API key for place search.")
-                        else:
-                            st.info("No places found. Try a different query or wider radius.")
-                else:
-                    st.error("Location not found.")
-            else:
-                st.warning("Please fill in both fields.")
-
-        # Show results list
-        for p in st.session_state.place_results:
-            st.markdown(f"""
-            <div class="place-card">
-            <b>{p['name']}</b><br>
-            <small>📌 {p['address']}</small><br>
-            <small>🏷️ {p['category']}</small>
-            {"<br><small>📞 " + p['phone'] + "</small>" if p['phone'] else ""}
-            </div>""", unsafe_allow_html=True)
 
     # ── Layers tab ──────────────────────────────────────────────────────────
     elif tab == "Layers":
