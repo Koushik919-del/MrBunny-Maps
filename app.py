@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import folium
 from streamlit_folium import st_folium
 from streamlit_geolocation import streamlit_geolocation
@@ -304,6 +305,19 @@ iframe {
 div[data-testid="stVerticalBlock"] > div:has(iframe) {
     height: 100vh !important;
 }
+iframe[srcdoc*="mrbunny-fab"] {
+    width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    border: 0 !important;
+    position: fixed !important;
+    bottom: 0 !important;
+    right: 0 !important;
+}
+div[data-testid="stVerticalBlock"] > div:has(iframe[srcdoc*="mrbunny-fab"]) {
+    height: 0 !important;
+    overflow: visible !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -547,8 +561,10 @@ if st.session_state.route_info and tab == "Directions":
     </div>""", unsafe_allow_html=True)
 
 # ── MrBunny assistant widget (loaded from its own file) ───────────────────────
-try:
-    with open("mrbunny_widget.html", "r", encoding="utf-8") as f:
-        components.html(f.read(), height=1, width=1)
-except FileNotFoundError:
-    pass  # widget file not present; app still works fine without it
+for widget_path in ("mrbunny_widget.html", "Mrbunny Widget.html"):
+    try:
+        with open(widget_path, "r", encoding="utf-8") as f:
+            components.html(f.read(), height=0, width=0)
+        break
+    except FileNotFoundError:
+        continue
