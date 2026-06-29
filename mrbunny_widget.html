@@ -74,6 +74,12 @@
   });
 
   var hist = [];
+  var MODELS = [
+    'openai/gpt-oss-120b:free',
+    'openai/gpt-oss-20b:free',
+    'google/gemma-3-27b-it:free',
+    'meta-llama/llama-3.3-8b-instruct:free'
+  ];
   function scrollBot() { msgs.scrollTop = msgs.scrollHeight; }
 
   function mkBubble(role, text) {
@@ -89,10 +95,58 @@
     else if(!on&&t){t.remove();}
   }
 
+  function localAnswer(text) {
+    var q = text.toLowerCase();
+    if (q.includes('who made you') || q.includes('who created you') || q.includes('who built you')) {
+      return 'Koushik Tummepalli made me for Nova Maps. I help with places, directions, traffic, map styles, and location questions. \uD83D\uDC30';
+    }
+    return null;
+  }
+
+  async function callOpenRouter(messages) {
+    var lastErr = 'OpenRouter request failed';
+
+    for (var i = 0; i < MODELS.length; i++) {
+      var model = MODELS[i];
+      var res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + OPENROUTER_KEY,
+          'HTTP-Referer': window.location.href,
+          'X-Title': 'MrBunny'
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: messages
+        })
+      });
+
+      var data = await res.json().catch(function(){ return {}; });
+      if (res.ok && data.choices && data.choices[0] && data.choices[0].message) {
+        return data.choices[0].message.content;
+      }
+
+      lastErr = (data && data.error && (data.error.message || data.error.code)) || res.statusText || lastErr;
+      console.warn('MrBunny model failed:', model, lastErr);
+    }
+
+    throw new Error(lastErr);
+  }
+
   async function send() {
     var text = inp.value.trim(); if(!text) return;
     inp.value=''; inp.disabled=true; btn.disabled=true;
     mkBubble('user', text); 
+
+    var localReply = localAnswer(text);
+    if (localReply) {
+      mkBubble('assistant', localReply);
+      hist.push({role: 'user', content: text});
+      hist.push({role: 'assistant', content: localReply});
+      inp.disabled=false; btn.disabled=false; inp.focus();
+      return;
+    }
     
     // Convert history for OpenRouter format
     var messages = [{role: 'system', content: SYS}];
@@ -108,37 +162,14 @@
         return;
       }
 
-      var res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + OPENROUTER_KEY,
-          'HTTP-Referer': window.location.href, // Optional for OpenRouter
-          'X-Title': 'MrBunny' // Optional for OpenRouter
-        },
-        body: JSON.stringify({
-          model: 'openai/gpt-oss-120b:free',
-          messages: messages
-        })
-      });
-      
-      var data = await res.json();
+      var reply = await callOpenRouter(messages);
       setTyping(false);
-
-      if (!res.ok) {
-        var err = (data && data.error && (data.error.message || data.error.code)) || res.statusText || 'OpenRouter request failed';
-        mkBubble('assistant', 'OpenRouter error: ' + err);
-        return;
-      }
-      
-      var reply = (data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : 'I got an empty response from OpenRouter. Try again in a moment.';
-      
       mkBubble('assistant', reply);
       hist.push({role: 'user', content: text});
       hist.push({role: 'assistant', content: reply});
     } catch(e) {
       setTyping(false);
-      mkBubble('assistant', 'Error: Could not reach OpenRouter. Check your key and connection. \uD83D\uDC30');
+      mkBubble('assistant', 'OpenRouter is having trouble right now: ' + (e.message || 'unknown error') + '. Try again in a moment. \uD83D\uDC30');
       console.error(e);
     }
     inp.disabled=false; btn.disabled=false; inp.focus();
