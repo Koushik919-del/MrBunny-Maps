@@ -11,11 +11,11 @@
   if (doc.getElementById('mrbunny-fab')) return;
 
   // --- CONFIGURATION ---
-  var OPENROUTER_KEY = "[API_KEY]"; 
+  var OPENROUTER_KEY = __OPENROUTER_API_KEY__; 
   // ---------------------
 
   var CATALOGUE = [
-    "- Map Styles - OpenStreetMap, CartoDB Dark, CartoDB Light, Stadia Terrain, and Satelilite(Esri)",
+    "- Map styles: OpenStreetMap, CartoDB Dark, CartoDB Light, Stadia Terrain, and Satellite (Esri)",
     "- It can check Traffic around the Area",
     "- It can get Directions to places from places.",
     "- It can search locations.",
@@ -23,7 +23,7 @@
     "- MrBunny AI logo is 🐰, and the Nova Maps logo is 🗺️!",
   ].join("\n");
 
-  var SYS = "You are MrBunny, a AI assistant made by Koushik Tummepalli. You have your own websites with a lot more features, and you are SIEGE: The Clothing Empire and newly Nova Maps. You are here to help people find where locations are the world are and about their history. Don't get sidetracked and stay on this entire objective. Your solo website is (https://mrbunnyai-v2.streamlit.app/) Good Luck!";
+  var SYS = "You are MrBunny, an AI assistant made by Koushik Tummepalli for Nova Maps. Help people use Nova Maps, search for places, understand locations, get directions, check traffic, and learn basic history or context about places. Stay focused on maps, navigation, geography, and location help. Be warm, concise, and practical. Nova Maps features:\n\n" + CATALOGUE + "\n\nYour solo website is https://mrbunnyai-v2.streamlit.app/.";
 
   var st = doc.createElement('style');
   st.textContent =
@@ -56,10 +56,10 @@
 
   var panel = doc.createElement('div'); panel.id = 'mrbunny-panel';
   var hdr = doc.createElement('div'); hdr.id = 'bhdr';
-  hdr.innerHTML = '<div id="bav">\uD83D\uDC30</div><div id="bhtx"><div id="btitle">MrBunny AI</div><div id="bsub">Your Maps Navigatort</div></div><div id="bdot"></div>';
+  hdr.innerHTML = '<div id="bav">\uD83D\uDC30</div><div id="bhtx"><div id="btitle">MrBunny AI</div><div id="bsub">Your Maps Navigator</div></div><div id="bdot"></div>';
   var msgs = doc.createElement('div'); msgs.id = 'bmsgs';
   var welcome = doc.createElement('div'); welcome.className = 'bwb';
-  welcome.innerHTML = '<div class="blb">MrBunny</div><div class="bbot">Hey! \uD83D\uDC30 I\'m MrBunny, your assistant. !</div>';
+  welcome.innerHTML = '<div class="blb">MrBunny</div><div class="bbot">Hey! \uD83D\uDC30 I\'m MrBunny, your Nova Maps assistant. Ask me about places, directions, traffic, map styles, or what you can do here.</div>';
   msgs.appendChild(welcome);
   var bar = doc.createElement('div'); bar.id = 'bbar';
   var inp = doc.createElement('input'); inp.id='binp'; inp.type='text'; inp.placeholder='Ask MrBunny anything\u2026';
@@ -102,6 +102,12 @@
     setTyping(true);
 
     try {
+      if (!OPENROUTER_KEY || OPENROUTER_KEY === "[API_KEY]") {
+        setTyping(false);
+        mkBubble('assistant', 'MrBunny needs an OPENROUTER_API_KEY secret before I can answer live chat requests.');
+        return;
+      }
+
       var res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: 'POST',
         headers: {
@@ -118,8 +124,14 @@
       
       var data = await res.json();
       setTyping(false);
+
+      if (!res.ok) {
+        var err = (data && data.error && (data.error.message || data.error.code)) || res.statusText || 'OpenRouter request failed';
+        mkBubble('assistant', 'OpenRouter error: ' + err);
+        return;
+      }
       
-      var reply = (data.choices && data.choices[0]) ? data.choices[0].message.content : 'Something went wrong \uD83D\uDC30 Try again!';
+      var reply = (data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : 'I got an empty response from OpenRouter. Try again in a moment.';
       
       mkBubble('assistant', reply);
       hist.push({role: 'user', content: text});

@@ -23,6 +23,7 @@ st.set_page_config(
 TOMTOM_API_KEY = st.secrets.get("TOMTOM_API_KEY", os.getenv("TOMTOM_API_KEY", ""))
 ORS_API_KEY    = st.secrets.get("ORS_API_KEY",    os.getenv("ORS_API_KEY",    "" ))
 STADIA_API_KEY = st.secrets.get("STADIA_API_KEY", os.getenv("STADIA_API_KEY", ""))
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
 
 # ── Geocoder ──────────────────────────────────────────────────────────────────
 geolocator = Nominatim(user_agent="nova-maps-app (contact: your-email@example.com)")
@@ -564,7 +565,11 @@ if st.session_state.route_info and tab == "Directions":
 for widget_path in ("mrbunny_widget.html", "Mrbunny Widget.html"):
     try:
         with open(widget_path, "r", encoding="utf-8") as f:
-            components.html(f.read(), height=0, width=0)
+            widget_html = f.read().replace(
+                "__OPENROUTER_API_KEY__",
+                json.dumps(OPENROUTER_API_KEY),
+            )
+            components.html(widget_html, height=0, width=0)
         break
     except FileNotFoundError:
         continue
